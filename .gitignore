@@ -1,0 +1,4 @@
+# Virtual environment
+assiment_env/
+# Environment variables
+.env
