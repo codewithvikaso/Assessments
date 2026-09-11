@@ -13,6 +13,22 @@ from app.db.redis import redis_manager
 from app.models.document import DocumentModel
 
 
+"""
+Document processing flow:
+
+1. Redis queue provides the document job.
+2. MongoDB changes status: queued -> processing.
+3. Worker processes the document.
+4. Success:
+   - MongoDB status -> completed
+   - Summary stored in MongoDB
+   - Successful summary cached in Redis
+5. Failure:
+   - MongoDB status -> failed
+   - Error stored in MongoDB
+   - Failed result is not cached
+6. Active-job count is decremented in Redis in both cases.
+"""
 # ---------------------------------------------------------
 # Logging
 # ---------------------------------------------------------
@@ -184,8 +200,9 @@ class DocumentWorker:
             await asyncio.sleep(
                 processing_time
             )
-
-            # Approximately 10% failure
+            # Simulate a 10% processing failure as required by the assignment.
+            # Failed documents are marked as "failed" in MongoDB and are not
+            # stored in the Redis summary cache.
             if random.random() < 0.10:
                 raise RuntimeError(
                     "Simulated document processing failure"
@@ -202,7 +219,8 @@ class DocumentWorker:
                 summary,
             )
 
-            # Cache successful summary
+            # Cache only successful summaries. This allows future requests
+            # with the same content hash to reuse the generated summary.
             await self.cache_summary(
                 document["content_hash"],
                 summary,
@@ -214,6 +232,9 @@ class DocumentWorker:
             )
 
         except Exception as exc:
+            # MongoDB is the source of truth for document status.
+            # When processing fails, update the document to "failed"
+            # and store the error message for the GET /documents/{id} API.
 
             logger.exception(
                 "Document %s processing failed",
@@ -227,7 +248,9 @@ class DocumentWorker:
 
         finally:
 
-            # Always release active-job slot
+            # Release the user's active-job slot whether processing
+            # succeeds or fails, so a failed job does not consume
+            # the user's rate-limit capacity permanently.
             await self.decrement_active_jobs(
                 user_id
             )
@@ -334,6 +357,8 @@ class DocumentWorker:
         document_id: str,
         error: str,
     ):
+        # Document status is maintained in MongoDB because MongoDB
+        # is the source of truth for the document lifecycle.
 
         await self.collection.update_one(
             {
@@ -360,6 +385,8 @@ class DocumentWorker:
         content_hash: str,
         summary: dict,
     ):
+        # Redis is used only as a temporary cache for successful summaries.
+        # Failed processing results are intentionally not cached.
 
         cache_key = (
             f"document:summary:{content_hash}"

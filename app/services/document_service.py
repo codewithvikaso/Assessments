@@ -138,7 +138,7 @@ class DocumentService:
         ).hexdigest()
 
     # ---------------------------------------------------------
-    # Redis cache
+    # Redis cache here we check new document is exist
     # ---------------------------------------------------------
 
     async def _get_cached_summary(
